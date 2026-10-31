@@ -45,7 +45,14 @@ if (
   );
   if (extraction.status !== 0) throw new Error("SDK extraction failed.");
 }
-const release = path.join(root, "release", "BioFocus-Windows");
+const outputIndex = process.argv.indexOf("--output");
+const releaseBase = path.join(root, "release");
+const release = path.resolve(
+  releaseBase,
+  outputIndex >= 0 ? process.argv[outputIndex + 1] : "BioFocus-Windows",
+);
+if (!release.startsWith(path.resolve(releaseBase) + path.sep))
+  throw new Error("Output must stay inside the project release folder.");
 await fs.mkdir(release, { recursive: true });
 const csc = path.join(
   process.env.WINDIR || "C:/Windows",
@@ -74,6 +81,7 @@ const result = spawnSync(
     "/out:" + path.join(release, "BioFocus.exe"),
     ...refs.map((r) => "/reference:" + r),
     path.join(root, "windows/BioFocus.cs"),
+    path.join(root, "windows/ModelService.cs"),
   ],
   { stdio: "inherit", windowsHide: true },
 );
@@ -103,7 +111,7 @@ await fs.writeFile(
 );
 await fs.writeFile(
   path.join(release, "使用说明.txt"),
-  "双击 BioFocus.exe 启动。请保留整个文件夹的文件。\r\n需要 Windows 10/11、.NET Framework 4.8 与 Microsoft Edge WebView2 Runtime。\r\n默认连接桌面“文献阅读”文件夹（含子目录）。可在左侧更换文件夹。\r\n设置中填写有道智云 AppKey / AppSecret；医学领域需在有道控制台开通。\r\n上/下换行，左/右调整聚焦行数。PDF、笔记与凭据仅保存在本机。\r\nGPT 服务按当前需求暂未接入。\r\n",
+  "双击 BioFocus.exe 启动。请保留整个文件夹的文件。\r\n需要 Windows 10/11、.NET Framework 4.8 与 Microsoft Edge WebView2 Runtime。\r\n默认连接桌面“文献阅读”文件夹（含子目录）。可在左侧更换文件夹。\r\n设置中填写有道智云 AppKey / AppSecret；医学领域需在有道控制台开通。\r\n上/下按半框移动，奇数向下取整；左/右调整聚焦行数。PDF、笔记与凭据仅保存在本机。\r\n在设置中填写 OpenAI API Key，选择模型，保存并测试后即可问答。\r\n",
 );
 await writeNotices(root, release, folder);
 console.log("Windows application built: " + path.join(release, "BioFocus.exe"));

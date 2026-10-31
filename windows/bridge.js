@@ -34,6 +34,13 @@
       configureYoudao: (config) => invoke("youdao:configure", config),
       clearYoudao: () => invoke("youdao:clear"),
       translate: (q) => invoke("youdao:translate", q),
+      testYoudao: () => invoke("youdao:test"),
+      modelStatus: () => invoke("model:status"),
+      configureModel: (config) => invoke("model:configure", config),
+      clearModel: () => invoke("model:clear"),
+      listModels: (apiKey) => invoke("model:models", apiKey || ""),
+      testModel: () => invoke("model:test"),
+      askModel: (input) => invoke("model:chat", input),
       getLibrary: () => invoke("library:get"),
       chooseLibrary: () => invoke("library:choose"),
       readLibraryFile: async (key) => {

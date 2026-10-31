@@ -166,10 +166,10 @@ export async function createDemo() {
     "If a figure was missed, draw a",
     "protected region around the figure.",
     "",
-    "A place for future conversations",
-    "The GPT panel is prepared for a",
-    "future service integration. No model",
-    "responses are generated in this version.",
+    "A place for focused conversations",
+    "Connect the GPT panel with your",
+    "own OpenAI API key to discuss",
+    "selected passages and ask questions.",
     "Your PDF stays inside your browser.",
   ];
   for (const [col, text] of [

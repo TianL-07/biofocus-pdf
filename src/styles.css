@@ -1901,6 +1901,53 @@ kbd {
   padding-top: 15px;
   margin-top: 18px;
 }
+.secondary-button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--accent);
+  border-radius: 5px;
+  font-size: 10px;
+  padding: 9px 11px;
+}
+.model-buttons {
+  margin-top: 13px;
+  flex-wrap: wrap;
+}
+.config-buttons {
+  flex-wrap: wrap;
+}
+.chat-message.assistant {
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.chat-message.assistant p {
+  line-height: 1.95;
+}
+.chat-error {
+  font-size: 10px;
+  color: #b4795d;
+  line-height: 1.8;
+}
+.chat-error button,
+.chat-resend {
+  font-size: 9px;
+  display: block;
+  color: var(--accent);
+  margin-top: 7px;
+  padding: 0;
+}
+.context-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 11px 12px 0;
+}
+.context-option input {
+  accent-color: var(--accent);
+  margin: 0;
+}
 .folder-heading {
   display: flex;
   align-items: center;

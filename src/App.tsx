@@ -43,7 +43,8 @@ import * as storage from "./storage";
 import { createDemo } from "./demo";
 import { clamp, csvCell, readingStep } from "./geometry.mjs";
 import { download, annotatedPdf } from "./export";
-import { translator } from "./services";
+import { translator, assistant } from "./services";
+import { conversationHistory } from "./conversation.mjs";
 import type {
   Paper,
   Line,
@@ -138,7 +139,7 @@ export default function App() {
     [manualTerm, setManualTerm] = useState(""),
     [chatDraft, setChatDraft] = useState(""),
     [noteEditor, setNoteEditor] = useState<Highlight | null>(null),
-    [showSettings, setShowSettings] = useState(false),
+    [showSettings, setShowSettings] = useState(location.hash === "#settings"),
     [showHelp, setShowHelp] = useState(false),
     [exportOpen, setExportOpen] = useState(false),
     [dragging, setDragging] = useState(false),
@@ -152,6 +153,16 @@ export default function App() {
     [configBusy, setConfigBusy] = useState(false),
     [configMessage, setConfigMessage] = useState(""),
     [wordFilter, setWordFilter] = useState("");
+  const [modelReady, setModelReady] = useState(false),
+    [modelName, setModelName] = useState(""),
+    [modelKey, setModelKey] = useState(""),
+    [modelOptions, setModelOptions] = useState<string[]>([]),
+    [modelMessage, setModelMessage] = useState(""),
+    [modelBusy, setModelBusy] = useState(false),
+    [modelVerified, setModelVerified] = useState(""),
+    [chatBusy, setChatBusy] = useState(false),
+    [includePage, setIncludePage] = useState(false),
+    [youdaoTestBusy, setYoudaoTestBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null),
     importRef = useRef<HTMLInputElement>(null),
     viewportRef = useRef<HTMLDivElement>(null),
@@ -329,6 +340,13 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("bf-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    void assistant.status().then((status) => {
+      setModelReady(status.configured);
+      setModelName(status.model || "");
+      setModelVerified(status.verifiedAt || "");
+    });
+  }, []);
   useEffect(() => {
     if (!window.biofocus) return;
     void window.biofocus
@@ -577,22 +595,148 @@ export default function App() {
     setPanel(true);
     clearSelection();
   };
-  const sendQuestion = () => {
-    if (!chatDraft.trim() || !paper) return;
+  const sendQuestion = async () => {
+    const source = paperRef.current,
+      text = chatDraft.trim();
+    if (!source || !text || chatBusy) return;
+    const id = crypto.randomUUID();
+    setChatDraft("");
     update((p) => ({
       ...p,
       chat: [
         ...p.chat,
         {
-          id: crypto.randomUUID(),
+          id,
           role: "user",
-          text: chatDraft.trim(),
+          text,
           page: p.page,
+          status: modelReady ? "sending" : "draft",
         },
       ],
     }));
-    setChatDraft("");
-    notify("问题已保存。GPT 尚未接入，暂未发送给模型。");
+    if (!modelReady) {
+      setShowSettings(true);
+      notify("问题已保存，请先配置 OpenAI。");
+      return;
+    }
+    setChatBusy(true);
+    try {
+      let context = "";
+      if (includePage && pdfRef.current) {
+        const page = await pdfRef.current.getPage(source.page),
+          content = await page.getTextContent();
+        context = content.items
+          .filter((i): i is typeof i & { str: string } => "str" in i)
+          .map((i) => i.str)
+          .join(" ")
+          .slice(0, 18000);
+        await updateById(source.id, (p) => ({
+          ...p,
+          chat: p.chat.map((m) => (m.id === id ? { ...m, context } : m)),
+        }));
+      }
+      const messages = [
+        ...conversationHistory(source.chat),
+        { role: "user" as const, content: text },
+      ];
+      const answer = await assistant.ask({
+        messages,
+        context: context || undefined,
+        page: source.page,
+      });
+      await updateById(source.id, (p) => ({
+        ...p,
+        chat: [
+          ...p.chat.map((m) =>
+            m.id === id ? { ...m, status: "complete" as const } : m,
+          ),
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            text: answer.text,
+            page: source.page,
+            status: "complete",
+            model: answer.model,
+            incomplete: answer.incomplete,
+          },
+        ],
+      }));
+    } catch (error) {
+      await updateById(source.id, (p) => ({
+        ...p,
+        chat: p.chat.map((m) =>
+          m.id === id
+            ? {
+                ...m,
+                status: "error",
+                error: error instanceof Error ? error.message : "模型请求失败",
+              }
+            : m,
+        ),
+      }));
+    } finally {
+      setChatBusy(false);
+    }
+  };
+  const fetchModels = async () => {
+    setModelBusy(true);
+    setModelMessage("");
+    try {
+      const result = await assistant.models(modelKey.trim() || undefined);
+      setModelOptions(result.models);
+      setModelMessage(
+        result.models.length
+          ? "已获取模型列表，请选择或填写模型，再保存。"
+          : "未找到文本模型，可直接填写你账号支持的模型 ID。",
+      );
+    } catch (error) {
+      setModelMessage(error instanceof Error ? error.message : "获取失败");
+    } finally {
+      setModelBusy(false);
+    }
+  };
+  const saveModel = async () => {
+    setModelBusy(true);
+    setModelMessage("");
+    try {
+      const result = await assistant.configure({
+        apiKey: modelKey.trim(),
+        model: modelName.trim(),
+      });
+      setModelKey("");
+      setModelReady(result.configured);
+      setModelVerified("");
+      setModelMessage("配置已保存。请点击“测试模型连接”确认实际调用成功。");
+    } catch (error) {
+      setModelMessage(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setModelBusy(false);
+    }
+  };
+  const testModel = async () => {
+    setModelBusy(true);
+    setModelMessage("正在发送一条不含文献内容的测试消息…");
+    try {
+      const result = await assistant.test();
+      setModelVerified(result.verifiedAt);
+      setModelMessage("模型测试成功：" + result.text);
+    } catch (error) {
+      setModelMessage(error instanceof Error ? error.message : "连接失败");
+    } finally {
+      setModelBusy(false);
+    }
+  };
+  const testYoudao = async () => {
+    setYoudaoTestBusy(true);
+    setConfigMessage("正在翻译测试词 cell…");
+    try {
+      const result = await translator.test();
+      setConfigMessage("有道测试成功：" + result.translation);
+    } catch (error) {
+      setConfigMessage(error instanceof Error ? error.message : "连接失败");
+    } finally {
+      setYoudaoTestBusy(false);
+    }
   };
   const exportWords = () => {
     if (!paper) return;
@@ -916,7 +1060,7 @@ export default function App() {
             <Keyboard size={16} /> 使用指南与快捷键
           </button>
           <div className="sidebar-footer">
-            <span className="version">BIOFOCUS · 0.1</span>
+            <span className="version">BIOFOCUS · 0.2</span>
             <IconButton
               icon={Settings2}
               label="设置"
@@ -1436,7 +1580,9 @@ export default function App() {
                   <h3>问问 GPT</h3>
                   <p>
                     <span />
-                    服务尚未接入
+                    {modelReady
+                      ? (modelVerified ? "已测试 · " : "已配置 · ") + modelName
+                      : "OpenAI 待配置"}
                   </p>
                 </div>
               </div>
@@ -1444,9 +1590,40 @@ export default function App() {
                 {paper?.chat.length ? (
                   paper.chat.map((m) => (
                     <div className={`chat-message ${m.role}`} key={m.id}>
-                      <span>你 · 第 {m.page} 页</span>
+                      <span>
+                        {m.role === "assistant" ? m.model || "OpenAI" : "你"} ·
+                        第 {m.page} 页
+                      </span>
                       <p>{m.text}</p>
-                      <small>问题已保存 · 尚未发送</small>
+                      {m.status === "sending" ? (
+                        <small>正在请求模型…</small>
+                      ) : m.status === "error" ? (
+                        <div className="chat-error">
+                          {m.error}
+                          <button onClick={() => setChatDraft(m.text)}>
+                            重新编辑并发送
+                          </button>
+                        </div>
+                      ) : m.status === "complete" ? (
+                        <small>
+                          {m.role === "assistant"
+                            ? m.incomplete
+                              ? "回答达到输出上限，可能尚未完成"
+                              : "模型回答 · 已保存在本地"
+                            : "已发送"}
+                          {m.context ? " · 已附本页文字" : ""}
+                        </small>
+                      ) : (
+                        <>
+                          <small>草稿 · 尚未发送</small>
+                          <button
+                            className="chat-resend"
+                            onClick={() => setChatDraft(m.text)}
+                          >
+                            编辑并发送
+                          </button>
+                        </>
+                      )}
                     </div>
                   ))
                 ) : (
@@ -1457,15 +1634,33 @@ export default function App() {
                       在文中选中内容，点击「问问 GPT」，就能把问题带到这里。
                     </p>
                     <div className="chat-status-note">
-                      按你的选择，GPT
-                      服务稍后接入。本版可整理和保存提问，不生成模型回答。
+                      {modelReady
+                        ? "已配置 OpenAI。可以提问或从文中选择一段内容开始。"
+                        : "先在设置中填写 OpenAI API Key 并选择模型，即可开始真实问答。"}
+                      {!modelReady && (
+                        <button
+                          className="subtle-button"
+                          onClick={() => setShowSettings(true)}
+                        >
+                          配置 OpenAI
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
               </div>
               <div className="chat-compose">
+                <label className="context-option">
+                  <input
+                    type="checkbox"
+                    checked={includePage}
+                    onChange={(e) => setIncludePage(e.target.checked)}
+                  />
+                  附上本页文字
+                </label>
                 <textarea
                   aria-label="向 GPT 提问"
+                  maxLength={20000}
                   placeholder="写下你的问题…"
                   value={chatDraft}
                   onChange={(e) => setChatDraft(e.target.value)}
@@ -1481,18 +1676,24 @@ export default function App() {
                   }}
                 />
                 <div>
-                  <span>Enter 保存 · Shift + Enter 换行</span>
+                  <span>
+                    {chatBusy
+                      ? "模型正在回答…"
+                      : "Enter 发送 · Shift + Enter 换行"}
+                  </span>
                   <button
                     onClick={sendQuestion}
-                    aria-label="保存问题"
-                    disabled={!chatDraft.trim()}
+                    aria-label="发送问题"
+                    disabled={!chatDraft.trim() || chatBusy}
                   >
                     <Send size={16} />
                   </button>
                 </div>
               </div>
               <div className="panel-bottom-note">
-                问题保存在本地，连接服务后再发送。
+                {includePage
+                  ? "会发送本页文字、问题和当前对话历史。"
+                  : "仅发送问题、引用文字和当前对话历史。"}
               </div>
             </>
           )}
@@ -1719,6 +1920,15 @@ export default function App() {
                     清除凭据
                   </button>
                 )}
+                {youdaoReady && (
+                  <button
+                    className="secondary-button"
+                    disabled={youdaoTestBusy || configBusy}
+                    onClick={() => void testYoudao()}
+                  >
+                    {youdaoTestBusy ? "测试中…" : "测试有道连接"}
+                  </button>
+                )}
                 <a
                   href="https://ai.youdao.com/"
                   target="_blank"
@@ -1733,12 +1943,109 @@ export default function App() {
               <div className="settings-section-title">
                 <MessageSquare size={17} />
                 <h3>GPT 问答</h3>
-                <span className="status-badge">稍后接入</span>
+                <span className={modelReady ? "ready-badge" : "status-badge"}>
+                  {modelVerified
+                    ? "测试通过"
+                    : modelReady
+                      ? "已配置"
+                      : "待配置"}
+                </span>
               </div>
               <p>
-                阅读侧栏已支持整理提问。按你的选择，本版不连接 GPT
-                服务，也不会模拟模型回答。
+                使用 OpenAI 官方
+                API。密钥只交给本机服务保存，不放入文献记录或项目源码。
               </p>
+              <label>
+                OpenAI API Key
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={modelKey}
+                  onChange={(e) => setModelKey(e.target.value)}
+                  placeholder={
+                    modelReady
+                      ? "已保存，留空沿用原密钥"
+                      : "填写你的 OpenAI API Key"
+                  }
+                />
+              </label>
+              <label>
+                模型名称
+                <input
+                  list="openai-models"
+                  value={modelName}
+                  onChange={(e) => setModelName(e.target.value)}
+                  placeholder="获取列表后选择，或填写模型 ID"
+                />
+                <datalist id="openai-models">
+                  {modelOptions.map((id) => (
+                    <option key={id} value={id} />
+                  ))}
+                </datalist>
+              </label>
+              <div className="config-buttons model-buttons">
+                <button
+                  className="secondary-button"
+                  disabled={modelBusy}
+                  onClick={() => void fetchModels()}
+                >
+                  获取可用模型
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={modelBusy}
+                  onClick={() => void saveModel()}
+                >
+                  保存模型配置
+                </button>
+                {modelReady && (
+                  <button
+                    className="secondary-button"
+                    disabled={modelBusy}
+                    onClick={() => void testModel()}
+                  >
+                    测试模型连接
+                  </button>
+                )}
+              </div>
+              {modelMessage && (
+                <p className="config-message" role="status">
+                  {modelMessage}
+                </p>
+              )}
+              <div className="credential-note">
+                <ShieldCheck size={15} />
+                <span>
+                  {window.biofocus
+                    ? "密钥使用 Windows 本机加密保存。"
+                    : "密钥保存在本地服务进程内存中。"}
+                  连接测试只发送一条简短测试消息，会消耗少量 API 额度。
+                </span>
+              </div>
+              <div className="config-buttons">
+                {modelReady && (
+                  <button
+                    className="subtle-button"
+                    onClick={() =>
+                      void assistant.clear().then(() => {
+                        setModelReady(false);
+                        setModelVerified("");
+                        notify("模型凭据已清除");
+                      })
+                    }
+                  >
+                    清除模型凭据
+                  </button>
+                )}
+                <a
+                  href="https://platform.openai.com/api-keys"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  OpenAI 密钥管理
+                  <ExternalLink size={12} />
+                </a>
+              </div>
             </div>
           </section>
         </div>

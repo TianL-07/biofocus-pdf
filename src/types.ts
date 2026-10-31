@@ -34,6 +34,11 @@ export type Message = {
   role: "user" | "assistant";
   text: string;
   page: number;
+  status?: "draft" | "sending" | "complete" | "error";
+  error?: string;
+  model?: string;
+  incomplete?: boolean;
+  context?: string;
 };
 export type Paper = {
   id: string;

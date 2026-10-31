@@ -32,7 +32,7 @@
 | 备份恢复 | 对应同一 PDF 内容哈希的 JSON 记录可重新导入 |
 | 有道翻译 | 选中文字后显示译文；支持医学领域与自定义术语表 ID |
 | 文章词汇本 | 逐篇保存查询文字、译文、页码、上下文、来源、次数和失败状态 |
-| GPT 侧栏 | 选中内容可带入右侧面板并保存问题；当前按需求暂不连接模型 |
+| GPT 侧栏 | 连接 OpenAI 官方 Responses API，支持多轮问答、错误提示、可选本页上下文与本地对话保存 |
 
 方向键在输入框、笔记编辑框或文字选中时保留正常编辑行为。也可用阅读器底部按钮移动聚焦框。1–2 行时步长为 1；3 行为 1；4–5 行为 2；6–7 行为 3，以此类推；页末自动换页。竖排下载水印不参与正文行导航。
 
@@ -57,11 +57,18 @@
 
 官方文档：[文本翻译 API](https://ai.youdao.com/DOCSIRMA/html/trans/api/wbfy/index.html)。
 
-## GPT 问答状态
+## 连接 OpenAI 问答
 
-GPT 服务按当前需求保留到后续配置。本版能从选中内容生成提问草稿、在右侧展开面板、保存提问；不会返回模拟模型回答，也不会把问题自动发送给任何服务。
+1. 在设置的 GPT 问答区域填写自己的 **OpenAI API Key**。
+2. 点击“获取可用模型”，选择模型；也可直接填写账号可用的模型 ID。
+3. 保存配置后，点击“测试模型连接”。应用会发送一条不含文献的简短测试消息，会消耗少量 API 额度。只有真实响应成功才显示测试通过。
+4. 选中文献内容并点击“问问 GPT”，或在右侧输入问题后发送。
 
-后续接入应通过桌面原生端或服务端保管 API Key，并明确所发送的文献上下文范围。参考 [OpenAI Responses 与会话状态文档](https://developers.openai.com/api/docs/guides/conversation-state)。
+默认只发送问题、选中引用和本篇文献中已经完成的对话历史；勾选“附上本页文字”后，才会额外发送当前页提取的文字（最多 18000 字符）。不自动上传完整 PDF 或图片。旧版本中的未发送问题仍是草稿，需要手动编辑并发送。
+
+模型密钥通过 Windows DPAPI 加密，保存在本机 `model.bin`，不会进入文献备份或 GitHub。问答请求固定发往 `https://api.openai.com/v1/responses`，设置 `store: false`，不使用服务器会话 ID；服务商仍按其数据政策处理请求。应用显示真实回答、拒答、配额与网络错误，不自动重试，也不生成模拟回答。达到输出上限的回答会标注未完成。
+
+参考 [OpenAI Responses 与会话状态文档](https://developers.openai.com/api/docs/guides/conversation-state)。
 
 ## 源码开发
 
@@ -97,7 +104,7 @@ Windows 构建脚本从微软官方 NuGet 下载固定版本 WebView2 SDK，依�
 
 `npm run build` 的 `dist/` 可部署到静态托管，支持 PDF 阅读、批注和本地保存。纯静态部署不包含有道密钥签名服务，翻译需要另接后端。
 
-`npm start` 会在本机提供构建后的页面和翻译接口，凭据可通过 `YOUDAO_APP_KEY`、`YOUDAO_APP_SECRET`、`YOUDAO_DOMAIN`、`YOUDAO_VOCAB_ID` **进程环境变量**配置；示例 `.env.example` 不会被自动加载。生产模式禁止网页配置凭据。如需对外提供服务，必须自行增加访问认证、HTTPS、限流与用户隔离，避免多人共享账户密钥。
+`npm start` 会在本机提供构建后的页面与服务接口。翻译可通过 `YOUDAO_APP_KEY`、`YOUDAO_APP_SECRET`、`YOUDAO_DOMAIN`、`YOUDAO_VOCAB_ID` **进程环境变量**配置；模型通过 `OPENAI_API_KEY` 和 `OPENAI_MODEL` 配置。示例 `.env.example` 不会被自动加载。生产模式禁止网页配置凭据。如需对外提供服务，必须自行增加访问认证、HTTPS、限流与用户隔离，避免多人共享账户密钥。
 
 ## 数据与隐私
 
