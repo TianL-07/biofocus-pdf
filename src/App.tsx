@@ -145,24 +145,16 @@ export default function App() {
     [dragging, setDragging] = useState(false),
     [toast, setToast] = useState(""),
     [pageInput, setPageInput] = useState("1");
-  const [youdaoReady, setYoudaoReady] = useState(false),
-    [appKey, setAppKey] = useState(""),
-    [appSecret, setAppSecret] = useState(""),
-    [domain, setDomain] = useState<"medicine" | "general">("medicine"),
-    [vocabId, setVocabId] = useState(""),
-    [configBusy, setConfigBusy] = useState(false),
-    [configMessage, setConfigMessage] = useState(""),
-    [wordFilter, setWordFilter] = useState("");
+  const [wordFilter, setWordFilter] = useState("");
   const [modelReady, setModelReady] = useState(false),
-    [modelName, setModelName] = useState(""),
+    [modelName, setModelName] = useState("gpt-6.1-sol"),
     [modelKey, setModelKey] = useState(""),
     [modelOptions, setModelOptions] = useState<string[]>([]),
     [modelMessage, setModelMessage] = useState(""),
     [modelBusy, setModelBusy] = useState(false),
     [modelVerified, setModelVerified] = useState(""),
     [chatBusy, setChatBusy] = useState(false),
-    [includePage, setIncludePage] = useState(false),
-    [youdaoTestBusy, setYoudaoTestBusy] = useState(false);
+    [includePage, setIncludePage] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null),
     importRef = useRef<HTMLInputElement>(null),
     viewportRef = useRef<HTMLDivElement>(null),
@@ -331,7 +323,6 @@ export default function App() {
         notify("无法使用本地存储，请在普通窗口中打开应用。");
       }
     })();
-    translator.status().then((s) => setYoudaoReady(s.configured));
     return () => {
       disposed = true;
     };
@@ -343,7 +334,7 @@ export default function App() {
   useEffect(() => {
     void assistant.status().then((status) => {
       setModelReady(status.configured);
-      setModelName(status.model || "");
+      setModelName(status.model || "gpt-6.1-sol");
       setModelVerified(status.verifiedAt || "");
     });
   }, []);
@@ -516,19 +507,19 @@ export default function App() {
             .join(" ")
             .slice(0, 1800)
         : lines.find((l) => l.text.toLowerCase().includes(term.toLowerCase()))
-            ?.text || "";
+            ?.text || existing?.context || "";
     const w: Word = {
       id,
       term,
       translation: existing?.translation || "",
       definition: existing?.definition || "",
-      category: "有道翻译",
+      category: "GPT 生物医学翻译",
       context,
       page: selectedPage,
       count: (existing?.count || 0) + 1,
       found: !!existing?.found,
       created: existing?.created || Date.now(),
-      provider: "有道智云",
+      provider: "OpenAI · " + modelName,
       status: "pending",
     };
     update((p) => ({
@@ -539,7 +530,7 @@ export default function App() {
     setPanel(true);
     clearSelection();
     setManualTerm("");
-    if (!youdaoReady) {
+    if (!modelReady) {
       await updateById(source.id, (p) => ({
         ...p,
         words: p.words.map((word) =>
@@ -547,7 +538,7 @@ export default function App() {
             ? {
                 ...word,
                 status: "error",
-                error: "尚未配置有道 API。查询已记录，配置后可重试。",
+                error: "尚未配置 OpenAI API。查询已记录，配置后可重试。",
               }
             : word,
         ),
@@ -556,7 +547,7 @@ export default function App() {
       return;
     }
     try {
-      const result = await translator.translate(term);
+      const result = await translator.translate(term, context);
       await updateById(source.id, (p) => ({
         ...p,
         words: p.words.map((word) =>
@@ -705,6 +696,7 @@ export default function App() {
       });
       setModelKey("");
       setModelReady(result.configured);
+      setModelName(result.model || "gpt-6.1-sol");
       setModelVerified("");
       setModelMessage("配置已保存。请点击“测试模型连接”确认实际调用成功。");
     } catch (error) {
@@ -724,18 +716,6 @@ export default function App() {
       setModelMessage(error instanceof Error ? error.message : "连接失败");
     } finally {
       setModelBusy(false);
-    }
-  };
-  const testYoudao = async () => {
-    setYoudaoTestBusy(true);
-    setConfigMessage("正在翻译测试词 cell…");
-    try {
-      const result = await translator.test();
-      setConfigMessage("有道测试成功：" + result.translation);
-    } catch (error) {
-      setConfigMessage(error instanceof Error ? error.message : "连接失败");
-    } finally {
-      setYoudaoTestBusy(false);
     }
   };
   const exportWords = () => {
@@ -852,30 +832,6 @@ export default function App() {
       notify("已导出高亮及附注");
     } catch (error) {
       notify("导出失败：" + String(error));
-    }
-  };
-  const saveConfig = async () => {
-    if (!appKey.trim() || !appSecret.trim()) {
-      setConfigMessage("请填写应用 ID 和应用密钥。");
-      return;
-    }
-    setConfigBusy(true);
-    setConfigMessage("");
-    try {
-      const result = await translator.configure({
-        appKey: appKey.trim(),
-        appSecret: appSecret.trim(),
-        domain,
-        vocabId: vocabId.trim() || undefined,
-      });
-      setYoudaoReady(result.configured);
-      setAppKey("");
-      setAppSecret("");
-      setConfigMessage("配置已保存。可关闭设置，选择词汇进行翻译。");
-    } catch (error) {
-      setConfigMessage(error instanceof Error ? error.message : "保存失败");
-    } finally {
-      setConfigBusy(false);
     }
   };
   const deleteCurrent = async (p: Paper) => {
@@ -1060,7 +1016,7 @@ export default function App() {
             <Keyboard size={16} /> 使用指南与快捷键
           </button>
           <div className="sidebar-footer">
-            <span className="version">BIOFOCUS · 0.2</span>
+            <span className="version">BIOFOCUS · 0.3</span>
             <IconButton
               icon={Settings2}
               label="设置"
@@ -1421,12 +1377,12 @@ export default function App() {
                 </button>
               </form>
               <div
-                className={`service-indicator ${youdaoReady ? "connected" : ""}`}
+                className={`service-indicator ${modelReady ? "connected" : ""}`}
               >
                 <span />
-                {youdaoReady ? "有道智云已配置" : "有道 API 待配置"}
+                {modelReady ? "GPT 翻译已配置" : "GPT 翻译待配置"}
                 <button onClick={() => setShowSettings(true)}>
-                  {youdaoReady ? "设置" : "配置"}
+                  {modelReady ? "设置" : "配置"}
                   <ChevronRight size={12} />
                 </button>
               </div>
@@ -1453,7 +1409,7 @@ export default function App() {
                         {w.status === "pending" ? (
                           <p className="word-pending">
                             <span className="spinner small" />
-                            有道翻译中…
+                            GPT 翻译中…
                           </p>
                         ) : w.status === "error" ? (
                           <div className="word-error">
@@ -1475,7 +1431,7 @@ export default function App() {
                         {w.context && <blockquote>{w.context}</blockquote>}
                         <div className="word-bottom">
                           <span>
-                            {w.provider || "有道智云"} · 查询 {w.count} 次
+                            {w.provider || "历史翻译"} · 查询 {w.count} 次
                           </span>
                           <button
                             aria-label={`删除词汇 ${w.term}`}
@@ -1501,7 +1457,7 @@ export default function App() {
               </div>
               <div className="panel-bottom-note">
                 <ShieldCheck size={13} />
-                <span>仅选中的文字会发送给有道</span>
+                <span>仅选中文字和附近上下文发送给 GPT</span>
               </div>
             </>
           )}
@@ -1831,118 +1787,10 @@ export default function App() {
                 黑夜
               </button>
             </div>
-            <div className="settings-section">
-              <div className="settings-section-title">
-                <Languages size={18} />
-                <h3>有道智云翻译</h3>
-                <span className={youdaoReady ? "ready-badge" : "status-badge"}>
-                  {youdaoReady ? "已配置" : "待配置"}
-                </span>
-              </div>
-              <p>
-                选择医学领域翻译，或指定有道术语表。医学领域需在有道控制台开通。
-              </p>
-              <label>
-                应用 ID · AppKey
-                <input
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={appKey}
-                  onChange={(e) => setAppKey(e.target.value)}
-                  placeholder={
-                    youdaoReady ? "已保存，填写可更新" : "填写有道应用 ID"
-                  }
-                />
-              </label>
-              <label>
-                应用密钥 · AppSecret
-                <input
-                  type="password"
-                  autoComplete="new-password"
-                  value={appSecret}
-                  onChange={(e) => setAppSecret(e.target.value)}
-                  placeholder="仅在本机设置，不写入项目代码"
-                />
-              </label>
-              <div className="settings-grid">
-                <label>
-                  翻译领域
-                  <select
-                    value={domain}
-                    onChange={(e) =>
-                      setDomain(e.target.value as "medicine" | "general")
-                    }
-                  >
-                    <option value="medicine">医学 · medicine</option>
-                    <option value="general">通用 · general</option>
-                  </select>
-                </label>
-                <label>
-                  术语表 ID（可选）
-                  <input
-                    value={vocabId}
-                    onChange={(e) => setVocabId(e.target.value)}
-                    placeholder="vocabId"
-                  />
-                </label>
-              </div>
-              <div className="credential-note">
-                <ShieldCheck size={15} />
-                <span>
-                  {window.biofocus
-                    ? "桌面版使用 Windows 本机加密保存凭据。"
-                    : "网页版凭据仅保留在本地服务进程内存中，重启后需重填。"}
-                </span>
-              </div>
-              {configMessage && (
-                <p className="config-message" role="status">
-                  {configMessage}
-                </p>
-              )}
-              <div className="config-buttons">
-                <button
-                  className="primary-button"
-                  disabled={configBusy}
-                  onClick={() => void saveConfig()}
-                >
-                  {configBusy ? "保存中…" : "保存翻译配置"}
-                </button>
-                {youdaoReady && (
-                  <button
-                    className="subtle-button"
-                    onClick={() =>
-                      void translator.clear().then(() => {
-                        setYoudaoReady(false);
-                        notify("翻译凭据已清除");
-                      })
-                    }
-                  >
-                    清除凭据
-                  </button>
-                )}
-                {youdaoReady && (
-                  <button
-                    className="secondary-button"
-                    disabled={youdaoTestBusy || configBusy}
-                    onClick={() => void testYoudao()}
-                  >
-                    {youdaoTestBusy ? "测试中…" : "测试有道连接"}
-                  </button>
-                )}
-                <a
-                  href="https://ai.youdao.com/"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  有道控制台
-                  <ExternalLink size={12} />
-                </a>
-              </div>
-            </div>
             <div className="settings-section last">
               <div className="settings-section-title">
                 <MessageSquare size={17} />
-                <h3>GPT 问答</h3>
+                <h3>GPT 翻译与答疑</h3>
                 <span className={modelReady ? "ready-badge" : "status-badge"}>
                   {modelVerified
                     ? "测试通过"
@@ -1952,8 +1800,8 @@ export default function App() {
                 </span>
               </div>
               <p>
-                使用 OpenAI 官方
-                API。密钥只交给本机服务保存，不放入文献记录或项目源码。
+                翻译与答疑共用 OpenAI 官方 API
+                和模型配置；翻译进入本文词汇本，答疑进入右侧聊天，两边历史独立。
               </p>
               <label>
                 OpenAI API Key
@@ -1975,7 +1823,7 @@ export default function App() {
                   list="openai-models"
                   value={modelName}
                   onChange={(e) => setModelName(e.target.value)}
-                  placeholder="获取列表后选择，或填写模型 ID"
+                  placeholder="gpt-6.1-sol"
                 />
                 <datalist id="openai-models">
                   {modelOptions.map((id) => (
@@ -2020,6 +1868,15 @@ export default function App() {
                     ? "密钥使用 Windows 本机加密保存。"
                     : "密钥保存在本地服务进程内存中。"}
                   连接测试只发送一条简短测试消息，会消耗少量 API 额度。
+                </span>
+              </div>
+              <div className="credential-note">
+                <ShieldCheck size={15} />
+                <span>
+                  词汇本与问答记录保存在本机，不会同步到 ChatGPT
+                  App。翻译发送选中文字及附近上下文；答疑发送问题和本篇已完成的对话，附本页文字需主动勾选。不创建远端会话；API
+                  数据默认不用于训练，常规安全日志仍可能保留最多 30
+                  天，例外情况可能更久。
                 </span>
               </div>
               <div className="config-buttons">

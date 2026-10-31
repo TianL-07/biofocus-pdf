@@ -16,9 +16,8 @@ static class Program {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         if (args.Length == 2 && args[0] == "--self-test") { Environment.Exit(SelfTests.Run(args[1])); return; }
         if(args.Length==2&&args[0]=="--connection-status"){
-            var data=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"BioFocus");var serializer=new JavaScriptSerializer();bool configured=false;string verified="";
-            try{var settings=serializer.Deserialize<Dictionary<string,object>>(Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(Path.Combine(data,"youdao.bin")),null,DataProtectionScope.CurrentUser)));configured=settings.ContainsKey("appKey")&&settings.ContainsKey("appSecret");object timestamp;if(settings.TryGetValue("verifiedAt",out timestamp))verified=Convert.ToString(timestamp);}catch{}
-            using(var model=new ModelService(data))File.WriteAllText(args[1],serializer.Serialize(new {youdao=new {configured=configured,verifiedAt=verified},model=model.Status()}));return;
+            var data=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"BioFocus");
+            using(var model=new ModelService(data))File.WriteAllText(args[1],new JavaScriptSerializer().Serialize(new {translator="OpenAI",model=model.Status()}));return;
         }
         Application.Run(new ReaderWindow(args.Contains("--configure")));
     }
@@ -31,30 +30,26 @@ sealed class ReaderWindow : Form {
     readonly string assets = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app");
     readonly object gate = new object();
     readonly Dictionary<string, string> files = new Dictionary<string, string>();
-    readonly HttpClient client = new HttpClient { Timeout = TimeSpan.FromSeconds(22) };
     readonly Timer refresh = new Timer { Interval = 900 };
     FileSystemWatcher watcher;
-    Dictionary<string, object> credentials;
     string folder;
-    int translating;
     ModelService modelService;
     readonly bool configureOnStart;
 
     public ReaderWindow(bool configure=false) {
         configureOnStart=configure;
-        Text = "BioFocus 0.2 · 专注阅读"; Width = 1460; Height = 970; MinimumSize = new System.Drawing.Size(940, 680);
+        Text = "BioFocus 0.3 · 专注阅读"; Width = 1460; Height = 970; MinimumSize = new System.Drawing.Size(940, 680);
         StartPosition = FormStartPosition.CenterScreen; BackColor = System.Drawing.Color.FromArgb(244, 243, 239);
         WindowState = FormWindowState.Maximized;
         view.Dock = DockStyle.Fill; Controls.Add(view);
         Shown += async (s,e) => { try { await Initialize(); } catch (Exception error) { MessageBox.Show("无法启动阅读器。请确认已安装 Microsoft Edge WebView2 Runtime。\n\n" + error.Message, "BioFocus"); } };
-        FormClosed += (s,e) => { if(watcher != null) watcher.Dispose(); refresh.Dispose(); client.Dispose(); if(modelService!=null)modelService.Dispose(); };
+        FormClosed += (s,e) => { if(watcher != null) watcher.Dispose(); refresh.Dispose(); if(modelService!=null)modelService.Dispose(); };
         refresh.Tick += (s,e) => { refresh.Stop(); try { Push("library", Scan()); } catch {} };
     }
 
     async Task Initialize() {
         Directory.CreateDirectory(data);
         modelService=new ModelService(data);
-        try { var bytes = File.ReadAllBytes(Path.Combine(data,"youdao.bin")); credentials = json.Deserialize<Dictionary<string,object>>(Encoding.UTF8.GetString(ProtectedData.Unprotect(bytes,null,DataProtectionScope.CurrentUser))); } catch {}
         try { folder = json.Deserialize<Dictionary<string,object>>(File.ReadAllText(Path.Combine(data,"library.json")))["folder"].ToString(); } catch { folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"文献阅读"); }
         if(!Directory.Exists(folder)) folder = null;
         var env = await CoreWebView2Environment.CreateAsync(null, Path.Combine(data,"WebView"));
@@ -67,7 +62,7 @@ sealed class ReaderWindow : Form {
         core.Settings.IsZoomControlEnabled = false;
         core.PermissionRequested += (s,e) => { e.State = CoreWebView2PermissionState.Deny; };
         core.NavigationStarting += (s,e) => { Uri url; if(!Uri.TryCreate(e.Uri,UriKind.Absolute,out url) || url.Scheme != "https" || url.Host != "biofocus.local") e.Cancel=true; };
-        core.NewWindowRequested += (s,e) => { e.Handled=true; Uri url; if(Uri.TryCreate(e.Uri,UriKind.Absolute,out url) && url.Scheme=="https" && new[]{"ai.youdao.com","platform.openai.com"}.Contains(url.Host)) System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url.AbsoluteUri) { UseShellExecute=true }); };
+        core.NewWindowRequested += (s,e) => { e.Handled=true; Uri url; if(Uri.TryCreate(e.Uri,UriKind.Absolute,out url) && url.Scheme=="https" && url.Host=="platform.openai.com") System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url.AbsoluteUri) { UseShellExecute=true }); };
         core.WebMessageReceived += OnMessage;
         core.AddWebResourceRequestedFilter("https://biofocus.local/__library/*",CoreWebView2WebResourceContext.All);
         core.WebResourceRequested += (s,e) => {
@@ -94,15 +89,7 @@ sealed class ReaderWindow : Form {
             id=request["id"].ToString(); var method=request["method"].ToString(); object input; request.TryGetValue("input",out input);
             object result;
             switch(method) {
-                case "youdao:status": result=new { configured=credentials!=null,verifiedAt=Value(credentials,"verifiedAt") }; break;
-                case "youdao:configure": {
-                    var config = input as Dictionary<string,object>; ValidateConfig(config);
-                    var cipher=ProtectedData.Protect(Encoding.UTF8.GetBytes(json.Serialize(config)),null,DataProtectionScope.CurrentUser);
-                    File.WriteAllBytes(Path.Combine(data,"youdao.bin"),cipher); credentials=config; result=new { configured=true }; break;
-                }
-                case "youdao:clear": credentials=null; if(File.Exists(Path.Combine(data,"youdao.bin"))) File.Delete(Path.Combine(data,"youdao.bin")); result=new { configured=false }; break;
-                case "youdao:translate": if(translating>=2) throw new Exception("已有翻译正在进行，请稍后手动重试。"); translating++; try { result=await Translate(Convert.ToString(input)); } finally { translating--; } break;
-                case "youdao:test": {var translated=json.Deserialize<Dictionary<string,object>>(json.Serialize(await Translate("cell")));credentials["verifiedAt"]=DateTime.UtcNow.ToString("o");File.WriteAllBytes(Path.Combine(data,"youdao.bin"),ProtectedData.Protect(Encoding.UTF8.GetBytes(json.Serialize(credentials)),null,DataProtectionScope.CurrentUser));result=new { translation=translated["translation"],verifiedAt=credentials["verifiedAt"] };break;}
+                case "model:translate": result=await modelService.Translate(input as Dictionary<string,object>);break;
                 case "model:status": result=modelService.Status();break;
                 case "model:configure": result=modelService.Configure(input as Dictionary<string,object>);break;
                 case "model:clear": modelService.Clear();result=new { configured=false };break;
@@ -163,35 +150,13 @@ sealed class ReaderWindow : Form {
         while(current.Length>root.TrimEnd(Path.DirectorySeparatorChar).Length) { if((File.GetAttributes(current)&FileAttributes.ReparsePoint)!=0) throw new Exception("不读取符号链接。"); current=Path.GetDirectoryName(current); }
     }
     internal static string Hash(string value) { using(var hash=SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-","").ToLowerInvariant(); }
-    internal static string SignInput(string value) {
-        var chars=new List<string>(); for(int i=0;i<value.Length;i++) { if(char.IsHighSurrogate(value[i]) && i+1<value.Length && char.IsLowSurrogate(value[i+1])) { chars.Add(value.Substring(i,2));i++; } else chars.Add(value.Substring(i,1)); }
-        return chars.Count<=20?value:String.Concat(chars.Take(10))+chars.Count+String.Concat(chars.Skip(chars.Count-10));
-    }
     static string Value(Dictionary<string,object> values,string key,string fallback="") { object value; return values!=null && values.TryGetValue(key,out value) && value!=null?value.ToString():fallback; }
-    static void ValidateConfig(Dictionary<string,object> config) { if(config==null || String.IsNullOrWhiteSpace(Value(config,"appKey")) || String.IsNullOrWhiteSpace(Value(config,"appSecret")) || Value(config,"appKey").Length>300 || Value(config,"appSecret").Length>500) throw new Exception("请填写有效的应用 ID 和应用密钥。"); if(!new[]{"medicine","general"}.Contains(Value(config,"domain","medicine"))) throw new Exception("翻译领域无效。"); }
-    async Task<object> Translate(string q) {
-        if(credentials==null) throw new Exception("尚未配置有道 API，请在设置中填写应用 ID 和密钥。");
-        if(String.IsNullOrWhiteSpace(q) || q.Length>10000) throw new Exception("请选择不超过 5000 个字符的文字。");
-        var config=credentials; string salt=Guid.NewGuid().ToString(),time=((long)(DateTime.UtcNow-new DateTime(1970,1,1)).TotalSeconds).ToString();
-        var body=new Dictionary<string,string> { {"q",q},{"from","auto"},{"to","zh-CHS"},{"appKey",Value(config,"appKey")},{"salt",salt},{"curtime",time},{"signType","v3"},{"sign",Hash(Value(config,"appKey")+SignInput(q)+salt+time+Value(config,"appSecret"))} };
-        string domain=Value(config,"domain","medicine"); if(domain=="medicine") {body["domain"]="medicine";body["rejectFallback"]="true";}
-        if(Value(config,"vocabId")!="") body["vocabId"]=Value(config,"vocabId");
-        using(var response=await client.PostAsync("https://openapi.youdao.com/api",new FormUrlEncodedContent(body))) {
-            if(!response.IsSuccessStatusCode) throw new Exception("有道服务暂不可用（HTTP "+(int)response.StatusCode+"）。");
-            var result=json.Deserialize<Dictionary<string,object>>(await response.Content.ReadAsStringAsync());
-            if(Value(result,"errorCode")!="0") throw new Exception("有道错误 "+Value(result,"errorCode")+"：请检查接口凭据、账户余额以及医学领域服务权限。");
-            object translated; if(!result.TryGetValue("translation",out translated) || ModelService.ArrayItems(translated)==null) throw new Exception("有道未返回译文。");
-            var explanations=new string[0]; object basic; if(result.TryGetValue("basic",out basic)) { var b=basic as Dictionary<string,object>; object explains; if(b!=null && b.TryGetValue("explains",out explains) && explains is object[]) explanations=((object[])explains).Select(x=>x.ToString()).ToArray(); }
-            return new { translation=String.Join("\n",ModelService.ArrayItems(translated).Select(x=>x.ToString())), explains=explanations, provider=domain=="medicine"?"有道智云 · 医学领域":"有道智云 · 通用" };
-        }
-    }
+
 }
 
 static class SelfTests {
     internal static int Run(string output) {
         try {
-            if(ReaderWindow.SignInput("transcriptome")!="transcriptome") throw new Exception("Short-query signing failed");
-            if(ReaderWindow.SignInput("abcdefghijklmnopqrstuvwxyz")!="abcdefghij26qrstuvwxyz") throw new Exception("Long-query signing failed");
             string text="BioFocus credential roundtrip test";
             var cipher=ProtectedData.Protect(Encoding.UTF8.GetBytes(text),null,DataProtectionScope.CurrentUser);
             if(Encoding.UTF8.GetString(ProtectedData.Unprotect(cipher,null,DataProtectionScope.CurrentUser))!=text) throw new Exception("Windows encryption test failed");
@@ -200,8 +165,17 @@ static class SelfTests {
             if(!ModelService.Normalize(chat).Last()["content"].ToString().Contains("document-excerpt"))throw new Exception("Model context normalization failed");
             var response=serializer.Deserialize<Dictionary<string,object>>("{\"output\":[{\"type\":\"reasoning\",\"content\":[]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Real response text\"}]}]}");
             if(ModelService.Extract(response)!="Real response text")throw new Exception("Model response parsing failed");
+            var translationRequest=new Dictionary<string,object>{{"q","knockout"},{"context","CRISPR knockout cells"},{"messages","private chat"}};
+            string translationPayload=serializer.Serialize(ModelService.TranslationInput(translationRequest));
+            if(translationPayload.Contains("private chat")||!translationPayload.Contains("CRISPR"))throw new Exception("Translation history isolation failed");
+            response["model"]=ModelService.DefaultModel;
+            response["output"]=new object[]{new {type="message",content=new object[]{new {type="output_text",text=serializer.Serialize(new {translation="敲除",explains=new[]{"基因失活"}})}}}};
+            response=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(response));
+            var parsed=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(ModelService.ParseTranslation(response)));
+            if(parsed["translation"].ToString()!="敲除"||parsed["model"].ToString()!="gpt-6.1-sol")throw new Exception("Translation response parsing failed");
+            response["status"]="incomplete";bool incompleteRejected=false;try{ModelService.ParseTranslation(response);}catch{incompleteRejected=true;}if(!incompleteRejected)throw new Exception("Partial translation accepted");
             bool rejected=false;try{ReaderWindow.ValidateLibraryPath(@"C:\outside\paper.pdf",@"C:\papers");}catch{rejected=true;}if(!rejected)throw new Exception("Folder-boundary validation failed");
-            File.WriteAllText(output,"PASS: native signing, Windows credential encryption, folder boundaries, model context and response parsing."); return 0;
+            File.WriteAllText(output,"PASS: Windows credential encryption, folder boundaries, model context, translation history isolation and response parsing."); return 0;
         } catch(Exception error) {File.WriteAllText(output,"FAIL: "+error.Message);return 1;}
     }
 }

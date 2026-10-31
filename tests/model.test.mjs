@@ -7,6 +7,7 @@ import {
   normalizeChat,
   extractResponse,
   validateModelConfig,
+  translateModel, normalizeTranslation, extractTranslation, DEFAULT_MODEL,
 } from "../server/model.mjs";
 const config = { apiKey: "test-only-placeholder", model: "test-model" };
 test("chat history excludes unsent drafts and keeps the context budget bounded", () => {
@@ -26,6 +27,50 @@ test("chat history excludes unsent drafts and keeps the context budget bounded",
   assert.equal(history[0].role, "user");
   assert.equal(history.length, 2);
   assert.ok(history.reduce((sum, m) => sum + m.content.length, 0) <= 25);
+});
+const translationResponse = (text = JSON.stringify({ translation: "敲除", explains: ["knockout；使目标基因失活"] }), status = "completed") => ({ model: DEFAULT_MODEL, status, output: [{ type: "message", content: [{ type: "output_text", text }] }] });
+test("GPT translation shares the selected model but has no chat history and uses a strict result format", async () => {
+  let calls = 0;
+  const result = await translateModel({ q: "knockout", context: "CRISPR knockout cells", messages: [{ role: "user", content: "private chat history" }] }, { ...config, model: DEFAULT_MODEL }, async (url, request) => {
+    calls++;
+    assert.equal(url, "https://api.openai.com/v1/responses");
+    const body = JSON.parse(request.body);
+    assert.equal(body.model, "gpt-6.1-sol");
+    assert.equal(body.store, false);
+    assert.equal(body.reasoning.effort, "low");
+    assert.equal(body.text.format.type, "json_schema");
+    assert.equal(body.text.format.strict, true);
+    assert.equal(body.input.length, 1);
+    assert.deepEqual(JSON.parse(body.input[0].content), { selected_text: "knockout", reference_context: "CRISPR knockout cells" });
+    assert.ok(!JSON.stringify(body).includes("private chat history"));
+    assert.match(body.instructions, /生物医学/);
+    return { ok: true, json: async () => translationResponse() };
+  });
+  assert.equal(result.translation, "敲除");
+  assert.equal(result.model, DEFAULT_MODEL);
+  assert.equal(calls, 1);
+});
+test("translation rejects missing, oversized and incomplete results without inventing a word", async () => {
+  assert.throws(() => normalizeTranslation({ q: " " }), /请选择/);
+  assert.throws(() => normalizeTranslation({ q: "x".repeat(5001) }), /请选择/);
+  assert.throws(() => normalizeTranslation({ q: "cell", context: "x".repeat(1801) }), /上下文/);
+  assert.throws(() => extractTranslation(translationResponse("not json")), /格式无效/);
+  assert.throws(() => extractTranslation(translationResponse('{"translation":"", "explains":[]}')), /有效译文/);
+  assert.throws(() => extractTranslation(translationResponse('{"translation":"细胞", "explains":[1]}')), /有效译文/);
+  assert.throws(() => extractTranslation(translationResponse(undefined, "incomplete")), /未完成/);
+  let calls = 0;
+  await assert.rejects(translateModel({ q: "cell" }, null, () => calls++), /尚未配置/);
+  await assert.rejects(translateModel({ q: "cell" }, config, async () => { calls++; return { ok: false, status: 429 }; }), /配额/);
+  assert.equal(calls, 1);
+});
+test("Sol is the exact default and chat uses a supported reasoning setting", async () => {
+  assert.equal(validateModelConfig({ apiKey: config.apiKey }).model, "gpt-6.1-sol");
+  await askModel({ messages: [{ role: "user", content: "Explain" }] }, { ...config, model: DEFAULT_MODEL }, async (_, request) => {
+    const body = JSON.parse(request.body);
+    assert.equal(body.reasoning.effort, "medium");
+    assert.equal(body.max_output_tokens, 8192);
+    return { ok: true, json: async () => translationResponse("answer") };
+  });
 });
 test("OpenAI request uses the official endpoint and never stores server-side conversation state", async () => {
   let calls = 0;

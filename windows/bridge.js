@@ -30,11 +30,7 @@
   Object.defineProperty(window, "biofocus", {
     value: Object.freeze({
       platform: "desktop",
-      youdaoStatus: () => invoke("youdao:status"),
-      configureYoudao: (config) => invoke("youdao:configure", config),
-      clearYoudao: () => invoke("youdao:clear"),
-      translate: (q) => invoke("youdao:translate", q),
-      testYoudao: () => invoke("youdao:test"),
+      translateModel: (input) => invoke("model:translate", input),
       modelStatus: () => invoke("model:status"),
       configureModel: (config) => invoke("model:configure", config),
       clearModel: () => invoke("model:clear"),

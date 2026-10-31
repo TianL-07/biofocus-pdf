@@ -1,14 +1,9 @@
 import type { FolderState } from "./types";
-export type YoudaoConfig = {
-  appKey: string;
-  appSecret: string;
-  vocabId?: string;
-  domain?: "general" | "medicine";
-};
 export type Translation = {
   translation: string;
   explains: string[];
   provider: string;
+  model: string;
 };
 export type ModelConfig = { apiKey: string; model: string };
 export type ModelStatus = {
@@ -31,11 +26,10 @@ declare global {
   interface Window {
     biofocus?: {
       platform: string;
-      configureYoudao: (c: YoudaoConfig) => Promise<{ configured: boolean }>;
-      youdaoStatus: () => Promise<{ configured: boolean }>;
-      translate: (q: string) => Promise<Translation>;
-      clearYoudao: () => Promise<void>;
-      testYoudao: () => Promise<{ translation: string; verifiedAt: string }>;
+      translateModel: (input: {
+        q: string;
+        context?: string;
+      }) => Promise<Translation>;
       modelStatus: () => Promise<ModelStatus>;
       configureModel: (c: ModelConfig) => Promise<ModelStatus>;
       clearModel: () => Promise<void>;
@@ -62,30 +56,10 @@ async function localApi(path: string, body?: unknown) {
   return result;
 }
 export const translator = {
-  status: async () => {
-    if (window.biofocus) return window.biofocus.youdaoStatus();
-    try {
-      return await localApi("youdao/status");
-    } catch {
-      return { configured: false };
-    }
-  },
-  configure: async (config: YoudaoConfig) =>
+  translate: async (q: string, context = ""): Promise<Translation> =>
     window.biofocus
-      ? window.biofocus.configureYoudao(config)
-      : localApi("youdao/config", config),
-  translate: async (q: string): Promise<Translation> =>
-    window.biofocus
-      ? window.biofocus.translate(q)
-      : localApi("youdao/translate", { q }),
-  clear: async () =>
-    window.biofocus
-      ? window.biofocus.clearYoudao()
-      : localApi("youdao/config", { clear: true }),
-  test: async () =>
-    window.biofocus
-      ? window.biofocus.testYoudao()
-      : localApi("youdao/test", {}),
+      ? window.biofocus.translateModel({ q, context })
+      : localApi("model/translate", { q, context }),
 };
 export const assistant = {
   status: async (): Promise<ModelStatus> => {

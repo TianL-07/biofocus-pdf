@@ -2,28 +2,22 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { translateYoudao, validateConfig } from "./youdao.mjs";
-import { askModel, listModels, validateModelConfig } from "./model.mjs";
+import {
+  askModel,
+  translateModel,
+  listModels,
+  validateModelConfig,
+} from "./model.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const production = process.argv.includes("--production"),
   port = Number(process.env.PORT || 5173);
-let credentials =
-  process.env.YOUDAO_APP_KEY && process.env.YOUDAO_APP_SECRET
-    ? validateConfig({
-        appKey: process.env.YOUDAO_APP_KEY,
-        appSecret: process.env.YOUDAO_APP_SECRET,
-        domain: process.env.YOUDAO_DOMAIN || "medicine",
-        vocabId: process.env.YOUDAO_VOCAB_ID,
-      })
-    : null;
 let inflight = 0;
-let modelCredentials =
-  process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL
-    ? validateModelConfig({
-        apiKey: process.env.OPENAI_API_KEY,
-        model: process.env.OPENAI_MODEL,
-      })
-    : null;
+let modelCredentials = process.env.OPENAI_API_KEY
+  ? validateModelConfig({
+      apiKey: process.env.OPENAI_API_KEY,
+      model: process.env.OPENAI_MODEL,
+    })
+  : null;
 let modelActive = false;
 const vite = production
   ? null
@@ -60,13 +54,6 @@ const server = http.createServer(async (req, res) => {
       const origin = req.headers.origin;
       if (origin && !["http://" + host].includes(origin)) {
         send(res, 403, { error: "来源验证失败。" });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/youdao/status") {
-        send(res, 200, {
-          configured: !!credentials,
-          verifiedAt: credentials?.verifiedAt,
-        });
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/model/status") {
@@ -147,35 +134,17 @@ const server = http.createServer(async (req, res) => {
         }
         return;
       }
-      if (url.pathname === "/api/youdao/config") {
-        if (production) {
-          send(res, 403, { error: "部署版请通过服务器环境变量配置凭据。" });
-          return;
-        }
-        credentials = input.clear ? null : validateConfig(input);
-        send(res, 200, { configured: !!credentials });
-        return;
-      }
-      if (url.pathname === "/api/youdao/translate") {
+      if (url.pathname === "/api/model/translate") {
         if (inflight >= 2) {
-          send(res, 429, { error: "已有翻译正在进行，请稍后重试。" });
+          send(res, 429, { error: "已有翻译正在进行，请稍后手动重试。" });
           return;
         }
         inflight++;
         try {
-          send(res, 200, await translateYoudao(input.q, credentials));
+          send(res, 200, await translateModel(input, modelCredentials));
         } finally {
           inflight--;
         }
-        return;
-      }
-      if (url.pathname === "/api/youdao/test") {
-        const result = await translateYoudao("cell", credentials);
-        credentials.verifiedAt = new Date().toISOString();
-        send(res, 200, {
-          translation: result.translation,
-          verifiedAt: credentials.verifiedAt,
-        });
         return;
       }
       send(res, 404, { error: "接口不存在。" });
