@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.openai/
+.env*
+!.env.example
+*.log
+*.tsbuildinfo
+playwright-report/
+test-results/
+release/
+*.exe
+*.zip
+.native/
+*.dll
+*.pdb
