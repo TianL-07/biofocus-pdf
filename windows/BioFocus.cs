@@ -163,6 +163,7 @@ static class SelfTests {
             var serializer=new JavaScriptSerializer();
             var chat=serializer.Deserialize<Dictionary<string,object>>("{\"messages\":[{\"role\":\"user\",\"content\":\"Explain this term\"}],\"context\":\"Untrusted page text\",\"page\":2}");
             if(!ModelService.Normalize(chat).Last()["content"].ToString().Contains("document-excerpt"))throw new Exception("Model context normalization failed");
+            if(System.Net.ServicePointManager.SecurityProtocol!=System.Net.SecurityProtocolType.Tls12)throw new Exception("Modern TLS setup failed");
             var response=serializer.Deserialize<Dictionary<string,object>>("{\"output\":[{\"type\":\"reasoning\",\"content\":[]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Real response text\"}]}]}");
             if(ModelService.Extract(response)!="Real response text")throw new Exception("Model response parsing failed");
             var translationRequest=new Dictionary<string,object>{{"q","knockout"},{"context","CRISPR knockout cells"},{"messages","private chat"}};

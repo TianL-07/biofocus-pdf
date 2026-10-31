@@ -11,6 +11,8 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
 sealed class ModelService : IDisposable {
+    // The Framework compiler does not emit a modern target attribute. Avoid its legacy SSL3/TLS1.0 default.
+    static ModelService() { System.Net.ServicePointManager.SecurityProtocol=System.Net.SecurityProtocolType.Tls12; }
     readonly string file;
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength=4*1024*1024 };
     readonly HttpClient client = new HttpClient(new HttpClientHandler { AllowAutoRedirect=false }) { Timeout=TimeSpan.FromSeconds(90) };
