@@ -41,7 +41,12 @@ import { PdfPage } from "./components/PdfPage";
 import { pdfjs } from "./pdf";
 import * as storage from "./storage";
 import { createDemo } from "./demo";
-import { clamp, csvCell, readingStep } from "./geometry.mjs";
+import {
+  clamp,
+  csvCell,
+  readingStep,
+  advanceReadingIndex,
+} from "./geometry.mjs";
 import { download, annotatedPdf } from "./export";
 import { translator, assistant } from "./services";
 import { conversationHistory } from "./conversation.mjs";
@@ -54,8 +59,10 @@ import type {
   Word,
   FolderState,
   FolderFile,
+  Rect,
 } from "./types";
 
+const EMPTY_REGIONS: Rect[] = [];
 const readPaperBytes = (p: Paper) =>
   p.source && window.biofocus
     ? window.biofocus.readLibraryFile(p.source.key)
@@ -127,7 +134,6 @@ export default function App() {
     [dim, setDim] = useState(() =>
       Number(localStorage.getItem("bf-dim") || 0.64),
     ),
-    [preserve, setPreserve] = useState(true),
     [zoom, setZoom] = useState(100),
     [availableWidth, setAvailableWidth] = useState(850);
   const [panel, setPanel] = useState(true),
@@ -398,8 +404,17 @@ export default function App() {
   const moveLine = useCallback(
     (step: number) => {
       const p = paperRef.current;
-      if (!p || !lines.length) return;
-      const next = p.line + step * readingStep(lineCount);
+      if (!p) return;
+      if (!lines.length) {
+        if (step > 0 && p.page < p.pages) changePage(p.page + 1);
+        else if (step < 0 && p.page > 1) changePage(p.page - 1, true);
+        return;
+      }
+      const next = advanceReadingIndex(
+        lines,
+        p.line,
+        step * readingStep(lineCount),
+      );
       if (next < 0 && p.page > 1) changePage(p.page - 1, true);
       else if (next >= lines.length && p.page < p.pages) changePage(p.page + 1);
       else
@@ -507,7 +522,9 @@ export default function App() {
             .join(" ")
             .slice(0, 1800)
         : lines.find((l) => l.text.toLowerCase().includes(term.toLowerCase()))
-            ?.text || existing?.context || "";
+            ?.text ||
+          existing?.context ||
+          "";
     const w: Word = {
       id,
       term,
@@ -1016,7 +1033,7 @@ export default function App() {
             <Keyboard size={16} /> 使用指南与快捷键
           </button>
           <div className="sidebar-footer">
-            <span className="version">BIOFOCUS · 0.3</span>
+            <span className="version">BIOFOCUS · 0.4</span>
             <IconButton
               icon={Settings2}
               label="设置"
@@ -1124,15 +1141,14 @@ export default function App() {
             />
           </div>
           <div className="toolbar-divider" />
-          <button
-            className={`text-button image-toggle ${preserve ? "enabled" : ""}`}
-            aria-pressed={preserve}
-            onClick={() => setPreserve(!preserve)}
+          <span
+            className="text-button image-toggle enabled"
+            title="图表、图内文字和图注始终常亮，不参与正文导航"
           >
             <Image size={16} />
-            图表常亮
+            图表与图注常亮
             <Check size={13} />
-          </button>
+          </span>
           <IconButton
             icon={Scan}
             label="手动框选常亮图表"
@@ -1222,9 +1238,8 @@ export default function App() {
                 count={lineCount}
                 focus={focus}
                 dim={dim}
-                preserve={preserve}
                 highlights={paper.highlights}
-                regions={paper.regions[paper.page] || []}
+                regions={paper.regions[paper.page] || EMPTY_REGIONS}
                 regionMode={regionMode}
                 search={search}
                 onLines={setLines}
@@ -1310,13 +1325,13 @@ export default function App() {
             <IconButton
               icon={ArrowUp}
               label="上一行"
-              disabled={!lines.length}
+              disabled={!paper || (!lines.length && paper.page <= 1)}
               onClick={() => moveLine(-1)}
             />
             <IconButton
               icon={ArrowDown}
               label="下一行"
-              disabled={!lines.length}
+              disabled={!paper || (!lines.length && paper.page >= paper.pages)}
               onClick={() => moveLine(1)}
             />
           </div>
@@ -1948,8 +1963,7 @@ export default function App() {
               点击正文可把聚焦框移动到对应行；选中文字后可翻译、提问、高亮、记笔记。输入文本或选中文字时，方向键保留正常编辑行为。
             </p>
             <p>
-              图表常亮会自动检测 PDF
-              内嵌图片并尝试识别矢量图。复杂图表可用工具栏的框选按钮补充保护区域。扫描
+              双栏正文按左栏到底、再读右栏排列；聚焦框在换栏前停止扩展。图表、图内文字与图注始终常亮，不参与正文导航；页眉、页脚和出版脚注会尽量排除。复杂图表可用工具栏的框选按钮补充保护区域。扫描
               PDF 需要先添加 OCR 文本层才能逐行阅读。
             </p>
             <p>

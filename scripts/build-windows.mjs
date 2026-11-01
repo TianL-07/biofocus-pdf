@@ -111,7 +111,7 @@ await fs.writeFile(
 );
 await fs.writeFile(
   path.join(release, "使用说明.txt"),
-  "双击 BioFocus.exe 启动。请保留整个文件夹的文件。\r\n需要 Windows 10/11、.NET Framework 4.8 与 Microsoft Edge WebView2 Runtime。\r\n默认连接桌面“文献阅读”文件夹（含子目录）。可在左侧更换文件夹。\r\n翻译与答疑共用 OpenAI API Key，默认模型 gpt-6.1-sol。\r\n上/下按半框移动，奇数向下取整；左/右调整聚焦行数。阅读记录保存在本机；翻译与答疑会将所选内容或问题发给 OpenAI。\r\n在设置中填写 OpenAI API Key，选择模型，保存并测试后即可翻译和问答。记录不自动同步到 ChatGPT App。\r\n",
+  "双击 BioFocus.exe 启动。请保留整个文件夹的文件。\r\n需要 Windows 10/11、.NET Framework 4.8 与 Microsoft Edge WebView2 Runtime。\r\n默认连接桌面“文献阅读”文件夹（含子目录）。可在左侧更换文件夹。\r\n翻译与答疑共用 OpenAI API Key，默认模型 gpt-6.1-sol。\r\n双栏正文先左后右；上/下按半框移动，奇数向下取整；左/右调整聚焦行数。图表、图内文字和图注始终常亮。页眉页脚不参与正文导航。阅读记录保存在本机；翻译与答疑会将所选内容或问题发给 OpenAI。\r\n在设置中填写 OpenAI API Key，选择模型，保存并测试后即可翻译和问答。记录不自动同步到 ChatGPT App。\r\n",
 );
 await writeNotices(root, release, folder);
 console.log("Windows application built: " + path.join(release, "BioFocus.exe"));

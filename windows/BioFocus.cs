@@ -38,7 +38,7 @@ sealed class ReaderWindow : Form {
 
     public ReaderWindow(bool configure=false) {
         configureOnStart=configure;
-        Text = "BioFocus 0.3 · 专注阅读"; Width = 1460; Height = 970; MinimumSize = new System.Drawing.Size(940, 680);
+        Text = "BioFocus 0.4 · 专注阅读"; Width = 1460; Height = 970; MinimumSize = new System.Drawing.Size(940, 680);
         StartPosition = FormStartPosition.CenterScreen; BackColor = System.Drawing.Color.FromArgb(244, 243, 239);
         WindowState = FormWindowState.Maximized;
         view.Dock = DockStyle.Fill; Controls.Add(view);

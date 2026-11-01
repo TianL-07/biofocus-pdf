@@ -2,10 +2,69 @@ import * as pdfjs from "pdfjs-dist";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { orderedLines, union, intersects } from "./geometry.mjs";
+import { buildDocumentProfile } from "./layout.mjs";
 import type { Rect, Line } from "./types";
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 export { pdfjs };
 type Matrix = number[];
+type TextContent = Awaited<ReturnType<pdfjs.PDFPageProxy["getTextContent"]>>;
+function textFragments(
+  content: TextContent,
+  viewport: pdfjs.PageViewport,
+): Line[] {
+  return content.items
+    .filter((i): i is TextItem => "str" in i)
+    .map((item, id) => {
+      const tx = pdfjs.Util.transform(viewport.transform, item.transform),
+        height = Math.hypot(tx[2], tx[3]);
+      return {
+        id,
+        x: tx[4] / viewport.width,
+        y:
+          (tx[5] - height * (content.styles[item.fontName]?.ascent ?? 0.8)) /
+          viewport.height,
+        w: (item.width * viewport.scale) / viewport.width,
+        h: height / viewport.height,
+        text: item.str,
+        baseline: tx[5] / viewport.height,
+        fontHeight: height / viewport.height,
+        fontSize: height / viewport.scale,
+        angle:
+          Math.atan2(tx[1], tx[0]) +
+          (content.styles[item.fontName]?.vertical ? Math.PI / 2 : 0),
+      };
+    });
+}
+const profiles = new WeakMap<
+  pdfjs.PDFDocumentProxy,
+  Promise<ReturnType<typeof buildDocumentProfile>>
+>();
+export function documentProfile(pdf: pdfjs.PDFDocumentProxy) {
+  let profile = profiles.get(pdf);
+  if (!profile) {
+    const pages = [
+      ...new Set([
+        ...Array.from({ length: Math.min(pdf.numPages, 6) }, (_, i) => i + 1),
+        Math.ceil(pdf.numPages / 2),
+        Math.max(1, pdf.numPages - 1),
+        pdf.numPages,
+      ]),
+    ];
+    profile = Promise.all(
+      pages.map(async (n) => {
+        const page = await pdf.getPage(n);
+        return {
+          fragments: textFragments(
+            await page.getTextContent(),
+            page.getViewport({ scale: 1 }),
+          ),
+        };
+      }),
+    ).then(buildDocumentProfile);
+    profiles.set(pdf, profile);
+  }
+  return profile;
+}
 const multiply = (a: Matrix, b: Matrix) => pdfjs.Util.transform(a, b);
 function boxOf(
   matrix: Matrix,
@@ -40,31 +99,15 @@ function boxOf(
 export async function pageGeometry(
   page: pdfjs.PDFPageProxy,
   viewport: pdfjs.PageViewport,
-): Promise<{ lines: Line[]; figures: Rect[] }> {
+): Promise<{ fragments: Line[]; figures: Rect[]; rules: Rect[] }> {
   const [content, operators] = await Promise.all([
     page.getTextContent(),
     page.getOperatorList(),
   ]);
-  const items: Line[] = [];
-  for (const item of content.items) {
-    if (!("str" in item) || !item.str.trim()) continue;
-    const tx = pdfjs.Util.transform(viewport.transform, item.transform);
-    const height = Math.hypot(tx[2], tx[3]);
-    const style = content.styles[item.fontName];
-    const ascent = style?.ascent ?? 0.8;
-    items.push({
-      x: tx[4] / viewport.width,
-      y: (tx[5] - height * ascent) / viewport.height,
-      w: (item.width * viewport.scale) / viewport.width,
-      h: height / viewport.height,
-      text: item.str,
-      baseline: tx[5] / viewport.height,
-      fontHeight: height / viewport.height,
-      angle: Math.atan2(tx[1], tx[0]),
-    });
-  }
+  const items = textFragments(content, viewport);
   const figures: Rect[] = [],
-    paths: Rect[] = [];
+    paths: Rect[] = [],
+    rules: Rect[] = [];
   let matrix: Matrix = [1, 0, 0, 1, 0, 0];
   const stack: Matrix[] = [];
   const OPS = pdfjs.OPS;
@@ -120,6 +163,7 @@ export async function pageGeometry(
           figures.push(boxOf(multiply(matrix, entry.transform), viewport));
     } else if (op === OPS.constructPath && a[2]?.length === 4) {
       const rect = boxOf(matrix, viewport, a[2]);
+      if (rect.w > 0.045 && rect.h < 0.004) rules.push(rect);
       if (rect.w * rect.h < 0.5 && rect.w > 0.001 && rect.h > 0.001)
         paths.push(rect);
     }
@@ -153,11 +197,12 @@ export async function pageGeometry(
       .map((c) => c.rect),
   );
   return {
-    lines: orderedLines(items),
+    fragments: items,
     figures: figures.filter((r) => r.w > 0.005 && r.h > 0.005),
+    rules,
   };
 }
-export async function renderedTextLines(
+export async function renderedTextFragments(
   page: pdfjs.PDFPageProxy,
   viewport: pdfjs.PageViewport,
   textLayer: pdfjs.TextLayer,
@@ -165,6 +210,24 @@ export async function renderedTextLines(
 ): Promise<Line[]> {
   const content = await page.getTextContent();
   const items = content.items.filter((item): item is TextItem => "str" in item);
+  // Browser fallback fonts can change after PDF.js measures its canvas font.
+  // Fit each horizontal span to the PDF advance width before measuring selection/focus boxes.
+  await document.fonts.ready;
+  const corrections: { span: HTMLSpanElement; scale: number }[] = [];
+  items.forEach((item, index) => {
+    const span = textLayer.textDivs[index];
+    if (!span?.isConnected || !item.str.trim() || item.width <= 0) return;
+    const tx = pdfjs.Util.transform(viewport.transform, item.transform);
+    if (Math.abs(Math.atan2(tx[1], tx[0])) > 0.001) return;
+    const measured = span.getBoundingClientRect().width,
+      target = item.width * viewport.scale;
+    if (measured > 0 && Math.abs(measured - target) > 0.5) {
+      const current = Number(span.style.getPropertyValue("--scale-x")) || 1;
+      corrections.push({ span, scale: (current * target) / measured });
+    }
+  });
+  for (const { span, scale } of corrections)
+    span.style.setProperty("--scale-x", String(scale));
   const bounds = container.getBoundingClientRect();
   const fragments: Line[] = [];
   items.forEach((item, index) => {
@@ -177,8 +240,8 @@ export async function renderedTextLines(
     const angle =
       Math.atan2(tx[1], tx[0]) +
       (content.styles[item.fontName]?.vertical ? Math.PI / 2 : 0);
-    if (Math.abs(angle) > Math.PI / 12) return;
     fragments.push({
+      id: index,
       text: item.str,
       x: (rect.left - bounds.left) / bounds.width,
       y: (rect.top - bounds.top) / bounds.height,
@@ -186,8 +249,9 @@ export async function renderedTextLines(
       h: rect.height / bounds.height,
       baseline: tx[5] / viewport.height,
       fontHeight: Math.hypot(tx[2], tx[3]) / viewport.height,
+      fontSize: Math.hypot(tx[2], tx[3]) / viewport.scale,
       angle,
     });
   });
-  return orderedLines(fragments);
+  return fragments;
 }

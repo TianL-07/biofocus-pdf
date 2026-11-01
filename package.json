@@ -1,6 +1,6 @@
 {
   "name": "biofocus-pdf",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "start": "node server/index.mjs --production",
-    "test": "node --test tests/geometry.test.mjs tests/library.test.mjs tests/export.test.mjs tests/model.test.mjs",
+    "test": "node --test tests/geometry.test.mjs tests/layout.test.mjs tests/library.test.mjs tests/export.test.mjs tests/model.test.mjs",
     "desktop": "npm run package && powershell -NoProfile -Command \"Start-Process -FilePath ./release/BioFocus-Windows/BioFocus.exe\"",
     "package": "npm run build && node scripts/build-windows.mjs"
   },

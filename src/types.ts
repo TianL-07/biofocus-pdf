@@ -4,6 +4,13 @@ export type Line = Rect & {
   baseline?: number;
   fontHeight?: number;
   angle?: number;
+  id?: number;
+  fontSize?: number;
+  sourceIds?: number[];
+  column?: string;
+  flow?: string;
+  columnLeft?: number;
+  columnRight?: number;
 };
 export type Highlight = {
   id: string;

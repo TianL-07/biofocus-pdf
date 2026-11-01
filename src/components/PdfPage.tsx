@@ -1,6 +1,12 @@
-import { useEffect, useRef, useState } from "react";
-import { pdfjs, pageGeometry, renderedTextLines } from "../pdf";
+import { useEffect, useRef, useState, useMemo } from "react";
+import {
+  pdfjs,
+  pageGeometry,
+  renderedTextFragments,
+  documentProfile,
+} from "../pdf";
 import { focusWindows, clamp } from "../geometry.mjs";
+import { analyzePageLayout } from "../layout.mjs";
 import type { Highlight, Line, Rect, SelectionInfo } from "../types";
 type Props = {
   pdf: pdfjs.PDFDocumentProxy;
@@ -10,7 +16,6 @@ type Props = {
   count: number;
   focus: boolean;
   dim: number;
-  preserve: boolean;
   highlights: Highlight[];
   regions: Rect[];
   regionMode: boolean;
@@ -28,8 +33,12 @@ export function PdfPage(props: Props) {
     textRef = useRef<HTMLDivElement>(null),
     rootRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(width * 1.294),
-    [lines, setLines] = useState<Line[]>([]),
-    [figures, setFigures] = useState<Rect[]>([]),
+    [pageData, setPageData] = useState<{
+      fragments: Line[];
+      figures: Rect[];
+      rules: Rect[];
+      profile: { bodyFont: number; runningText: string[] };
+    } | null>(null),
     [loading, setLoading] = useState(true),
     [drag, setDrag] = useState<Rect | null>(null),
     [renderError, setRenderError] = useState("");
@@ -38,14 +47,30 @@ export function PdfPage(props: Props) {
     maskId = `mask-${pdf.fingerprints[0]}-${page}`;
   const callbacks = useRef(props);
   callbacks.current = props;
+  const layout = useMemo(
+    () =>
+      pageData
+        ? analyzePageLayout(
+            pageData.fragments,
+            pageData.figures,
+            pageData.profile,
+            props.regions,
+            pageData.rules,
+          )
+        : null,
+    [pageData, props.regions],
+  );
+  const lines = (layout?.lines || []) as Line[];
+  useEffect(() => {
+    callbacks.current.onLines((layout?.lines || []) as Line[]);
+  }, [layout]);
   useEffect(() => {
     let cancelled = false,
       renderTask: pdfjs.RenderTask | undefined,
       textLayer: pdfjs.TextLayer | undefined;
     setLoading(true);
     setRenderError("");
-    setLines([]);
-    setFigures([]);
+    setPageData(null);
     callbacks.current.onLines([]);
     callbacks.current.onSelect(null);
     (async () => {
@@ -60,6 +85,10 @@ export function PdfPage(props: Props) {
         canvas.width = Math.floor(viewport.width * ratio);
         canvas.height = Math.floor(viewport.height * ratio);
         const geometryPromise = pageGeometry(proxy, viewport);
+        const profilePromise = documentProfile(pdf).catch(() => ({
+          bodyFont: 10,
+          runningText: [],
+        }));
         renderTask = proxy.render({
           canvasContext: canvas.getContext("2d")!,
           canvas,
@@ -80,16 +109,21 @@ export function PdfPage(props: Props) {
         await textLayer.render();
         if (cancelled) return;
         const geometry = await geometryPromise;
-        const visualLines = await renderedTextLines(
+        const fragments = await renderedTextFragments(
           proxy,
           viewport,
           textLayer,
           layer,
         );
+        const profile = await profilePromise;
         if (cancelled) return;
-        setLines(visualLines);
-        setFigures(geometry.figures);
-        callbacks.current.onLines(visualLines);
+        setPageData({
+          fragments,
+          figures: geometry.figures,
+          rules: geometry.rules,
+          profile,
+        });
+        if (cancelled) return;
         setLoading(false);
       } catch (error) {
         if (cancelled || String(error).includes("RenderingCancelled")) return;
@@ -159,9 +193,9 @@ export function PdfPage(props: Props) {
     };
   };
   const windows = focusWindows(lines, props.line, props.count) as Rect[],
-    protectedRegions = props.preserve ? [...figures, ...props.regions] : [];
+    protectedRegions = layout?.figures || [];
   const searched = props.search.trim()
-    ? lines.filter((l) =>
+    ? (layout?.allLines || []).filter((l) =>
         l.text.toLowerCase().includes(props.search.toLowerCase()),
       )
     : [];
@@ -177,6 +211,12 @@ export function PdfPage(props: Props) {
         const r = e.currentTarget.getBoundingClientRect(),
           x = (e.clientX - r.left) / r.width,
           y = (e.clientY - r.top) / r.height;
+        if (
+          protectedRegions.some(
+            (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h,
+          )
+        )
+          return;
         const nearest = lines
           .map((l, i) => ({
             i,
@@ -185,7 +225,7 @@ export function PdfPage(props: Props) {
               Math.max(0, l.x - x, x - l.x - l.w) * 2,
           }))
           .sort((a, b) => a.d - b.d)[0];
-        if (nearest) props.onLine(nearest.i);
+        if (nearest && nearest.d < 0.065) props.onLine(nearest.i);
       }}
     >
       <canvas
@@ -347,8 +387,9 @@ export function PdfPage(props: Props) {
       )}
       {!loading && !lines.length && !renderError && (
         <div className="scan-warning">
-          本页没有可提取文字，可能是扫描件。可使用图表保护框；逐行阅读需要带文本层的
-          PDF。
+          {pageData?.fragments.length
+            ? "本页图表、图注保持常亮，不参与正文逐行导航。"
+            : "本页没有可提取文字，可能是扫描件。逐行阅读需要带文本层的 PDF。"}
         </div>
       )}
     </div>
